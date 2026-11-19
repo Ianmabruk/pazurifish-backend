@@ -57,6 +57,8 @@ class Offer(db.Model):
     promo_price = db.Column(db.Float, default=0.0)
     start_date = db.Column(db.DateTime)
     expiry_date = db.Column(db.DateTime)
+    cta_label = db.Column(db.String(80), default='Shop Offers')
+    cta_url = db.Column(db.String(500), default='#offers')
     is_published = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -77,6 +79,9 @@ class Offer(db.Model):
             'promo_price': self.promo_price,
             'start_date': self.start_date.isoformat() if self.start_date else None,
             'expiry_date': self.expiry_date.isoformat() if self.expiry_date else None,
+            'ends_at': self.expiry_date.isoformat() if self.expiry_date else None,
+            'cta_label': self.cta_label or 'Shop Offers',
+            'cta_url': self.cta_url or '#offers',
             'is_published': self.is_published,
         }
 
@@ -87,7 +92,11 @@ class HeroContent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), default='FRESH CATCH, DELIVERED EVERY DAY.')
     subtitle = db.Column(db.String(200), default='FRESH FROM LAKE VICTORIA')
+    description = db.Column(db.String(500), default='')
+    cta_label = db.Column(db.String(80), default='')
+    cta_url = db.Column(db.String(500), default='')
     image_url = db.Column(db.String(500), default='https://images.unsplash.com/photo-1544943910-4c1dc44aab77?auto=format&fit=crop&w=1200&q=80')
+    sort_order = db.Column(db.Integer, default=0)
     is_published = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -97,7 +106,11 @@ class HeroContent(db.Model):
             'id': self.id,
             'title': self.title,
             'subtitle': self.subtitle,
+            'description': self.description or '',
+            'cta_label': self.cta_label or '',
+            'cta_url': self.cta_url or '',
             'image_url': self.image_url,
+            'sort_order': self.sort_order,
             'is_published': self.is_published,
         }
 
@@ -202,6 +215,7 @@ class Sale(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     receipt_number = db.Column(db.String(80), unique=True, nullable=False)
     cashier_id = db.Column(db.String(80), default='cashier')
+    source = db.Column(db.String(40), default='POS')
     subtotal = db.Column(db.Float, default=0.0)
     discount = db.Column(db.Float, default=0.0)
     total = db.Column(db.Float, default=0.0)
@@ -286,4 +300,25 @@ class WhatsAppMessage(db.Model):
             'message_type': self.message_type,
             'delivery_status': self.delivery_status,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Category(db.Model):
+    __tablename__ = 'categories'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), unique=True, nullable=False)
+    image_url = db.Column(db.String(500), default='')
+    display_order = db.Column(db.Integer, default=0)
+    is_active = db.Column(db.Boolean, default=True)
+    show_on_homepage = db.Column(db.Boolean, default=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'image_url': self.image_url or '',
+            'display_order': self.display_order,
+            'is_active': self.is_active,
+            'show_on_homepage': self.show_on_homepage,
         }

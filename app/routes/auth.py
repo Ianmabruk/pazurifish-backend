@@ -1,7 +1,7 @@
 import secrets
 
 from flask import Blueprint, jsonify, request
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
 from app.models import AdminUser
@@ -38,7 +38,7 @@ def register_user():
         email=email,
         full_name=name,
         role='administrator',
-        password_hash=check_password_hash.__globals__['__builtins__'].get('hash') if False else 'placeholder',
+        password_hash=generate_password_hash(password),
     ))
     db.session.commit()
     return jsonify({'message': 'User registered successfully.'}), 201
@@ -77,3 +77,20 @@ def me():
     if user is None:
         return jsonify({'error': 'Unauthorized'}), 401
     return jsonify({'user': user.to_dict()})
+
+
+@auth_bp.post('/password')
+def change_password():
+    user = get_authenticated_admin()
+    if user is None:
+        return jsonify({'error': 'Unauthorized'}), 401
+    payload = request.get_json(silent=True) or {}
+    current_password = payload.get('current_password', '')
+    new_password = payload.get('new_password', '')
+    if not check_password_hash(user.password_hash, current_password):
+        return jsonify({'error': 'Current password is incorrect.'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'New password must be at least 8 characters.'}), 400
+    user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+    return jsonify({'message': 'Password changed successfully.'})

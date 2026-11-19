@@ -80,3 +80,40 @@ def test_product_detail_endpoint_uses_database_id():
     payload = response.get_json()['product']
     assert payload['id'] == 1
     assert 'name' in payload
+
+
+def test_order_reduces_stock_and_blocks_over_quantity():
+    app = create_app()
+    client = app.test_client()
+
+    product_response = client.get('/api/products/1')
+    product_before = product_response.get_json()['product']['stock_quantity']
+
+    order_response = client.post(
+        '/api/orders',
+        json={
+            'items': [{'product_id': 1, 'quantity': 2, 'price': 650}],
+            'customer': {'name': 'Jane Doe', 'phone': '+254700000001'},
+        },
+    )
+    assert order_response.status_code == 201
+
+    updated_product = client.get('/api/products/1').get_json()['product']
+    assert updated_product['stock_quantity'] == product_before - 2
+
+    blocked_response = client.post(
+        '/api/orders',
+        json={
+            'items': [{'product_id': 1, 'quantity': 999, 'price': 650}],
+            'customer': {'name': 'Jane Doe', 'phone': '+254700000001'},
+        },
+    )
+    assert blocked_response.status_code == 400
+
+
+def test_admin_sales_report_requires_authentication():
+    app = create_app()
+    client = app.test_client()
+
+    response = client.get('/api/admin/reports/sales')
+    assert response.status_code == 401

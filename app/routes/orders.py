@@ -3,22 +3,36 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request
 
 from app.extensions import db
-from app.models import Order, OrderItem, Product
+from app.models import Order, OrderItem, Product, Sale, SaleItem, StockMovement
 
 orders_bp = Blueprint('orders', __name__, url_prefix='/api')
+
+
+def next_order_number():
+    count = Order.query.count() + 1
+    return f"PF-{datetime.utcnow().strftime('%Y%m%d')}-{count:05d}"
+
+
+def next_receipt_number():
+    count = Sale.query.count() + 1
+    return f"POS-{datetime.utcnow().strftime('%Y%m%d')}-{count:05d}"
 
 
 @orders_bp.post('/orders')
 def create_order():
     payload = request.get_json(silent=True) or {}
     items = payload.get('items', [])
-    delivery_area = payload.get('delivery_area') or 'Nairobi'
-    customer = payload.get('customer', {})
+    customer = payload.get('customer', {}) or {}
     if not items:
         return jsonify({'error': 'Order must include at least one item.'}), 400
 
+    name = str(customer.get('name') or customer.get('full_name') or '').strip()
+    phone = str(customer.get('phone') or customer.get('mobile') or '').strip()
+    if not name or not phone:
+        return jsonify({'error': 'Customer name and phone are required.'}), 400
+
     subtotal = 0.0
-    order_items = []
+    prepared_items = []
     for item in items:
         product_id = item.get('product_id')
         product = Product.query.get(product_id) if product_id else None
@@ -29,24 +43,26 @@ def create_order():
         quantity = int(item.get('quantity', 0) or 0)
         if quantity <= 0:
             return jsonify({'error': 'Item quantity must be greater than zero.'}), 400
-        unit_price = float(item.get('price', product.selling_price or product.price))
-        total_for_item = unit_price * quantity
-        subtotal += total_for_item
-        order_items.append({
-            'product_id': product.id,
-            'product_name': product.name,
+        if not product.is_available:
+            return jsonify({'error': f"{product.name} is currently unavailable."}), 400
+        if quantity > product.stock_quantity:
+            return jsonify({'error': f"Only {product.stock_quantity} units of {product.name} are available."}), 400
+        unit_price = float(item.get('price', product.selling_price))
+        line_total = unit_price * quantity
+        subtotal += line_total
+        prepared_items.append({
+            'product': product,
             'quantity': quantity,
             'unit_price': unit_price,
-            'total_price': total_for_item,
+            'line_total': line_total,
         })
 
-    order_number = f"PF-{datetime.utcnow().strftime('%Y')}-{len(Order.query.all()) + 1:04d}"
     order = Order(
-        order_number=order_number,
-        customer_name=(customer or {}).get('name') or 'Walk-in customer',
-        customer_phone=(customer or {}).get('phone') or 'Not provided',
-        delivery_area=delivery_area,
-        delivery_address=(customer or {}).get('address') or '',
+        order_number=next_order_number(),
+        customer_name=name,
+        customer_phone=phone,
+        delivery_area=str(payload.get('delivery_area') or customer.get('location') or 'Nairobi'),
+        delivery_address=str(customer.get('address') or customer.get('delivery_address') or ''),
         source='ONLINE',
         subtotal=subtotal,
         discount=0.0,
@@ -58,20 +74,108 @@ def create_order():
     )
     db.session.add(order)
     db.session.flush()
-    for item in order_items:
+
+    for item in prepared_items:
+        product = item['product']
         db.session.add(OrderItem(
             order_id=order.id,
-            product_id=item['product_id'],
-            product_name=item['product_name'],
+            product_id=product.id,
+            product_name=product.name,
             quantity=item['quantity'],
             unit_price=item['unit_price'],
-            total_price=item['total_price'],
+            total_price=item['line_total'],
         ))
+        before_stock = product.stock_quantity
+        product.stock_quantity = max(0, before_stock - item['quantity'])
+        db.session.add(StockMovement(
+            product_id=product.id,
+            movement_type='sale',
+            quantity_before=before_stock,
+            quantity_changed=-item['quantity'],
+            quantity_after=product.stock_quantity,
+            reason='online-order',
+            reference_type='order',
+            reference_id=str(order.id),
+            user_id='customer',
+        ))
+
     db.session.commit()
-    return jsonify({'order': order.to_dict()}), 201
+    return jsonify({'order': Order.query.get(order.id).to_dict()}), 201
+
+
+@orders_bp.post('/pos/sales')
+def create_pos_sale():
+    payload = request.get_json(silent=True) or {}
+    items = payload.get('items', [])
+    if not items:
+        return jsonify({'error': 'Sale must include at least one item.'}), 400
+
+    subtotal = 0.0
+    prepared_items = []
+    for item in items:
+        product_id = item.get('product_id')
+        product = Product.query.get(product_id) if product_id else None
+        if product is None:
+            return jsonify({'error': f"Product not found: {item.get('product_name', 'unknown')}"}), 400
+        quantity = int(item.get('quantity', 0) or 0)
+        if quantity <= 0:
+            return jsonify({'error': 'Item quantity must be greater than zero.'}), 400
+        if quantity > product.stock_quantity:
+            return jsonify({'error': f"Only {product.stock_quantity} units of {product.name} are available."}), 400
+        unit_price = float(item.get('price', product.selling_price))
+        line_total = unit_price * quantity
+        subtotal += line_total
+        prepared_items.append({'product': product, 'quantity': quantity, 'unit_price': unit_price, 'line_total': line_total})
+
+    sale = Sale(
+        receipt_number=next_receipt_number(),
+        cashier_id=str(payload.get('cashier_id') or 'cashier'),
+        source='POS',
+        subtotal=subtotal,
+        discount=float(payload.get('discount', 0) or 0),
+        total=float(payload.get('total', subtotal) or subtotal),
+        payment_method=str(payload.get('payment_method') or 'Cash'),
+        payment_reference=str(payload.get('payment_reference') or ''),
+        sale_status='COMPLETED',
+    )
+    db.session.add(sale)
+    db.session.flush()
+
+    for item in prepared_items:
+        product = item['product']
+        db.session.add(SaleItem(
+            sale_id=sale.id,
+            product_id=product.id,
+            product_name=product.name,
+            quantity=item['quantity'],
+            unit_price=item['unit_price'],
+            total_price=item['line_total'],
+        ))
+        before_stock = product.stock_quantity
+        product.stock_quantity = max(0, before_stock - item['quantity'])
+        db.session.add(StockMovement(
+            product_id=product.id,
+            movement_type='sale',
+            quantity_before=before_stock,
+            quantity_changed=-item['quantity'],
+            quantity_after=product.stock_quantity,
+            reason='pos-sale',
+            reference_type='sale',
+            reference_id=str(sale.id),
+            user_id=str(payload.get('cashier_id') or 'cashier'),
+        ))
+
+    db.session.commit()
+    return jsonify({'sale': Sale.query.get(sale.id).to_dict()}), 201
 
 
 @orders_bp.get('/orders')
 def list_orders():
     orders = [order.to_dict() for order in Order.query.order_by(Order.created_at.desc()).all()]
     return jsonify({'orders': orders})
+
+
+@orders_bp.get('/sales')
+def list_sales():
+    sales = [sale.to_dict() for sale in Sale.query.order_by(Sale.created_at.desc()).all()]
+    return jsonify({'sales': sales})

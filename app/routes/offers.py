@@ -15,6 +15,8 @@ def list_offers():
     offers = Offer.query.filter(Offer.is_published.is_(True)).all()
     active = []
     for offer in offers:
+        if offer.start_date and offer.start_date > now:
+            continue
         if offer.expiry_date and offer.expiry_date < now:
             continue
         offer_data = offer.to_dict()
@@ -25,21 +27,6 @@ def list_offers():
                 offer_data['product_name'] = product.name
                 offer_data['product_image_url'] = product.image_url
         active.append(offer_data)
-    if not active:
-        active = [{
-            'id': 0,
-            'title': 'Fresh Tilapia Special',
-            'description': 'Special prices on selected fresh tilapia.',
-            'image_url': 'https://images.unsplash.com/photo-1544943910-4c1dc44aab77?auto=format&fit=crop&w=900&q=80',
-            'badge': 'OFFER 01',
-            'discount_type': 'percentage',
-            'discount_value': 0,
-            'original_price': 0,
-            'promo_price': 0,
-            'start_date': None,
-            'expiry_date': None,
-            'is_published': True,
-        }]
     return jsonify({'offers': active})
 
 
@@ -66,6 +53,8 @@ def admin_offers():
             promo_price=float(payload.get('promo_price', 0) or 0),
             start_date=datetime.fromisoformat(payload['start_date']) if payload.get('start_date') else None,
             expiry_date=datetime.fromisoformat(payload['expiry_date']) if payload.get('expiry_date') else None,
+            cta_label=payload.get('cta_label', 'Shop Offers'),
+            cta_url=payload.get('cta_url', '#offers'),
             is_published=bool(payload.get('is_published', True)),
         )
         db.session.add(offer)
@@ -95,6 +84,8 @@ def manage_offer(offer_id):
         offer.discount_value = float(payload.get('discount_value', offer.discount_value) or 0)
         offer.original_price = float(payload.get('original_price', offer.original_price) or 0)
         offer.promo_price = float(payload.get('promo_price', offer.promo_price) or 0)
+        offer.cta_label = payload.get('cta_label', offer.cta_label)
+        offer.cta_url = payload.get('cta_url', offer.cta_url)
         if payload.get('start_date'):
             offer.start_date = datetime.fromisoformat(payload['start_date'])
         if payload.get('expiry_date'):

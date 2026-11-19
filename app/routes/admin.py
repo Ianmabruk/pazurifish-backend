@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
 
 from app.extensions import db
-from app.models import Order, Product, Sale, StockMovement
+from app.models import Order, OrderItem, Product, Sale, SaleItem, StockMovement
+from app.routes.auth import get_authenticated_admin
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/api/admin')
 
@@ -12,14 +13,14 @@ def require_admin():
     auth = request.headers.get('Authorization', '')
     if not auth.startswith('Bearer '):
         return False
-    return True
+    return get_authenticated_admin() is not None
 
 
 @admin_bp.before_request
 def guard_admin():
     if request.method == 'OPTIONS':
         return None
-    if request.path in {'/api/admin/orders', '/api/admin/inventory', '/api/admin/inventory/adjustments', '/api/admin/inventory/movements', '/api/admin/inventory/low-stock', '/api/admin/reports/sales', '/api/admin/reports/inventory', '/api/admin/reports/products', '/api/admin/reports/payment-methods'}:
+    if request.path.startswith('/api/admin/') and request.path not in {'/api/admin/content/hero'}:
         if not require_admin():
             return jsonify({'error': 'Unauthorized'}), 401
 
@@ -36,8 +37,19 @@ def update_order_status(order_id):
     payload = request.get_json(silent=True) or {}
     order.order_status = payload.get('status', order.order_status)
     order.whatsapp_status = payload.get('whatsapp_status', order.whatsapp_status)
+    if 'payment_status' in payload:
+        return jsonify({'error': 'Payment status must not be changed without a verified payment record.'}), 400
     db.session.commit()
     return jsonify({'order': order.to_dict()})
+
+
+@admin_bp.delete('/orders/<int:order_id>')
+def cancel_order(order_id):
+    order = Order.query.get_or_404(order_id)
+    order.order_status = 'CANCELLED'
+    order.payment_status = 'CANCELLED'
+    db.session.commit()
+    return jsonify({'deleted': True, 'order': order.to_dict()})
 
 
 @admin_bp.get('/inventory')
@@ -100,14 +112,41 @@ def low_stock():
     return jsonify({'products': products})
 
 
+@admin_bp.get('/sales')
+def admin_sales():
+    sales = [sale.to_dict() for sale in Sale.query.order_by(Sale.created_at.desc()).all()]
+    return jsonify({'sales': sales})
+
+
 @admin_bp.get('/reports/sales')
 def sales_report():
-    totals = {
-        'total_sales': sum(float(sale.total) for sale in Sale.query.all()),
-        'total_orders': Order.query.count(),
+    completed_sales = Sale.query.filter_by(sale_status='COMPLETED').all()
+    completed_orders = Order.query.filter(Order.order_status.notin_(['CANCELLED', 'PENDING_CONFIRMATION', 'PENDING'])).all()
+    now = datetime.utcnow()
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = day_start - timedelta(days=(day_start.weekday() + 1) % 7)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    total_online = sum(float(order.total) for order in completed_orders)
+    total_pos = sum(float(sale.total) for sale in completed_sales)
+    best_selling = {}
+    for item in OrderItem.query.all():
+        best_selling[item.product_name] = best_selling.get(item.product_name, 0) + item.quantity
+    for item in SaleItem.query.all():
+        best_selling[item.product_name] = best_selling.get(item.product_name, 0) + item.quantity
+
+    report = {
+        'total_sales': total_online + total_pos,
+        'total_online_orders': len(completed_orders),
+        'total_pos_sales': len(completed_sales),
+        'daily_sales': sum(float(sale.total) for sale in completed_sales if sale.created_at and sale.created_at >= day_start) + sum(float(order.total) for order in completed_orders if order.created_at and order.created_at >= day_start),
+        'weekly_sales': sum(float(sale.total) for sale in completed_sales if sale.created_at and sale.created_at >= week_start) + sum(float(order.total) for order in completed_orders if order.created_at and order.created_at >= week_start),
+        'monthly_sales': sum(float(sale.total) for sale in completed_sales if sale.created_at and sale.created_at >= month_start) + sum(float(order.total) for order in completed_orders if order.created_at and order.created_at >= month_start),
+        'best_selling_products': sorted(best_selling.items(), key=lambda pair: pair[1], reverse=True)[:5],
+        'current_stock_levels': {product.name: product.stock_quantity for product in Product.query.order_by(Product.name).all()},
         'total_products': Product.query.count(),
     }
-    return jsonify({'report': totals})
+    return jsonify({'report': report})
 
 
 @admin_bp.get('/reports/inventory')
@@ -124,4 +163,7 @@ def product_report():
 
 @admin_bp.get('/reports/payment-methods')
 def payment_report():
-    return jsonify({'report': {'cash': 0, 'mpesa': 0, 'card': 0, 'other': 0}})
+    cash = sum(float(sale.total) for sale in Sale.query.filter_by(payment_method='Cash').all())
+    mpesa = sum(float(sale.total) for sale in Sale.query.filter_by(payment_method='M-Pesa').all())
+    card = sum(float(sale.total) for sale in Sale.query.filter_by(payment_method='Card').all())
+    return jsonify({'report': {'cash': cash, 'mpesa': mpesa, 'card': card, 'other': 0}})
