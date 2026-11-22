@@ -3,7 +3,9 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request
 
 from app.extensions import db
-from app.models import Order, OrderItem, Product, Sale, SaleItem, StockMovement
+
+from app.extensions import db
+from app.models import Order, OrderItem, OrderStatusUpdate, Product, Sale, SaleItem, StockMovement
 
 orders_bp = Blueprint('orders', __name__, url_prefix='/api')
 
@@ -11,6 +13,11 @@ orders_bp = Blueprint('orders', __name__, url_prefix='/api')
 def next_order_number():
     count = Order.query.count() + 1
     return f"PF-{datetime.utcnow().strftime('%Y%m%d')}-{count:05d}"
+
+
+def next_tracking_number():
+    count = Order.query.count() + 1
+    return f"PAZ-{datetime.utcnow().strftime('%Y%m%d')}-{count:06d}"
 
 
 def next_receipt_number():
@@ -25,6 +32,12 @@ def create_order():
     customer = payload.get('customer', {}) or {}
     if not items:
         return jsonify({'error': 'Order must include at least one item.'}), 400
+
+    idempotency_key = str(payload.get('idempotency_key') or '').strip()
+    if idempotency_key:
+        existing = Order.query.filter_by(idempotency_key=idempotency_key).first()
+        if existing:
+            return jsonify({'order': existing.to_dict(), 'duplicate': True}), 200
 
     name = str(customer.get('name') or customer.get('full_name') or '').strip()
     phone = str(customer.get('phone') or customer.get('mobile') or '').strip()
@@ -59,6 +72,8 @@ def create_order():
 
     order = Order(
         order_number=next_order_number(),
+        tracking_number=next_tracking_number(),
+        idempotency_key=idempotency_key or None,
         customer_name=name,
         customer_phone=phone,
         delivery_area=str(payload.get('delivery_area') or customer.get('location') or 'Nairobi'),
@@ -74,6 +89,11 @@ def create_order():
     )
     db.session.add(order)
     db.session.flush()
+    db.session.add(OrderStatusUpdate(
+        order_id=order.id,
+        status='PENDING_CONFIRMATION',
+        note='Order received',
+    ))
 
     for item in prepared_items:
         product = item['product']
@@ -173,6 +193,30 @@ def create_pos_sale():
 def list_orders():
     orders = [order.to_dict() for order in Order.query.order_by(Order.created_at.desc()).all()]
     return jsonify({'orders': orders})
+
+
+@orders_bp.get('/orders/tracking/<tracking_number>')
+def track_order(tracking_number):
+    normalized = tracking_number.strip().upper()
+    order = Order.query.filter(
+        db.func.upper(Order.tracking_number) == normalized
+    ).first()
+    if order is None:
+        order = Order.query.filter(db.func.upper(Order.order_number) == normalized).first()
+    if order is None:
+        return jsonify({'error': 'No order was found for that tracking number.'}), 404
+
+    return jsonify({'order': {
+        'tracking_number': order.tracking_number or order.order_number,
+        'order_number': order.order_number,
+        'order_date': order.created_at.isoformat() if order.created_at else None,
+        'status': order.order_status,
+        'payment_status': order.payment_status,
+        'total': float(order.total),
+        'delivery_area': order.delivery_area,
+        'items': [item.to_dict() for item in order.items],
+        'status_history': [update.to_dict() for update in sorted(order.status_updates, key=lambda item: item.created_at or datetime.min)],
+    }})
 
 
 @orders_bp.get('/sales')

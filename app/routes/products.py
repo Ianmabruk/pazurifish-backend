@@ -1,3 +1,5 @@
+import json
+
 from flask import Blueprint, jsonify, request
 
 from app.extensions import db
@@ -45,6 +47,10 @@ def create_product():
         stock_quantity=int(payload.get('stock_quantity', 0) or 0),
         minimum_stock=int(payload.get('minimum_stock', 0) or 0),
         is_available=bool(payload.get('is_available', True)),
+        featured=bool(payload.get('featured', False)),
+        status=str(payload.get('status', 'Active')),
+        discount_price=float(payload['discount_price']) if payload.get('discount_price') not in (None, '') else None,
+        serving_sizes=json.dumps(payload.get('serving_sizes', []) if isinstance(payload.get('serving_sizes', []), list) else []),
     )
     db.session.add(product)
     db.session.commit()
@@ -75,6 +81,15 @@ def manage_product(product_id):
     product.stock_quantity = int(payload.get('stock_quantity', product.stock_quantity) or product.stock_quantity)
     product.minimum_stock = int(payload.get('minimum_stock', product.minimum_stock) or product.minimum_stock)
     product.is_available = bool(payload.get('is_available', product.is_available))
+    if 'featured' in payload:
+        product.featured = bool(payload['featured'])
+    if 'status' in payload:
+        product.status = str(payload['status'])
+    if 'discount_price' in payload:
+        product.discount_price = float(payload['discount_price']) if payload.get('discount_price') not in (None, '') else None
+    if 'serving_sizes' in payload:
+        sizes = payload['serving_sizes']
+        product.serving_sizes = json.dumps(sizes if isinstance(sizes, list) else [])
     product.sku = payload.get('sku', product.sku)
     db.session.commit()
     return jsonify({'product': product.to_dict()})

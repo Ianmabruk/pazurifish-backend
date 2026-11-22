@@ -1,3 +1,4 @@
+import os
 import secrets
 
 from flask import Blueprint, jsonify, request
@@ -9,6 +10,22 @@ from app.models import AdminUser
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 ADMIN_TOKENS = {}
 
+DEFAULT_ADMIN_EMAILS = {
+    'ian@gmail.com',
+    'noa@pasuri@gmail.com',
+    'dixon@pasuri@gmail.com',
+}
+
+
+def get_allowed_admin_emails():
+    configured = os.getenv('ADMIN_ALLOWED_EMAILS', '')
+    emails = {item.strip().lower() for item in configured.split(',') if item.strip()}
+    return emails or DEFAULT_ADMIN_EMAILS
+
+
+def normalize_admin_email(email):
+    return str(email or '').strip().lower()
+
 
 def get_authenticated_admin():
     header = request.headers.get('Authorization', '')
@@ -18,6 +35,9 @@ def get_authenticated_admin():
     email = ADMIN_TOKENS.get(token)
     if not email:
         return None
+    email = normalize_admin_email(email)
+    if email not in get_allowed_admin_emails():
+        return None
     return AdminUser.query.filter_by(email=email).first()
 
 
@@ -25,11 +45,13 @@ def get_authenticated_admin():
 def register_user():
     payload = request.get_json(silent=True) or {}
     name = payload.get('full_name') or payload.get('name')
-    email = payload.get('email')
+    email = normalize_admin_email(payload.get('email'))
     password = payload.get('password')
 
     if not all([name, email, password]):
         return jsonify({'error': 'full_name, email and password are required'}), 400
+    if email not in get_allowed_admin_emails():
+        return jsonify({'error': 'This email is not authorized for administrator access.'}), 403
 
     if AdminUser.query.filter_by(email=email).first():
         return jsonify({'error': 'An admin account with that email already exists.'}), 409
@@ -47,11 +69,13 @@ def register_user():
 @auth_bp.post('/login')
 def login_user():
     payload = request.get_json(silent=True) or {}
-    email = (payload.get('email') or '').strip().lower()
+    email = normalize_admin_email(payload.get('email'))
     password = payload.get('password') or ''
 
     if not all([email, password]):
         return jsonify({'error': 'email and password are required'}), 400
+    if email not in get_allowed_admin_emails():
+        return jsonify({'error': 'This email is not authorized for administrator access.'}), 403
 
     user = AdminUser.query.filter_by(email=email).first()
     if user is None or not check_password_hash(user.password_hash, password):
@@ -60,6 +84,37 @@ def login_user():
     token = secrets.token_urlsafe(32)
     ADMIN_TOKENS[token] = email
     return jsonify({'message': 'Login successful.', 'token': token, 'user': user.to_dict()}), 200
+
+
+@auth_bp.post('/provision-admin')
+def provision_admin():
+    provision_token = os.getenv('ADMIN_PROVISION_TOKEN', '')
+    supplied_token = str(request.headers.get('X-Admin-Provision-Token') or '').strip()
+    if not provision_token or supplied_token != provision_token:
+        return jsonify({'error': 'Administrator provisioning is not authorized.'}), 403
+
+    payload = request.get_json(silent=True) or {}
+    email = normalize_admin_email(payload.get('email'))
+    password = payload.get('password') or ''
+    full_name = str(payload.get('full_name') or 'Pazuri Administrator').strip()
+    if email not in get_allowed_admin_emails():
+        return jsonify({'error': 'This email is not authorized for administrator access.'}), 403
+    if len(password) < 8:
+        return jsonify({'error': 'Password must contain at least 8 characters.'}), 400
+
+    user = AdminUser.query.filter_by(email=email).first()
+    if user:
+        user.full_name = full_name
+        user.password_hash = generate_password_hash(password)
+    else:
+        db.session.add(AdminUser(
+            email=email,
+            full_name=full_name,
+            role='administrator',
+            password_hash=generate_password_hash(password),
+        ))
+    db.session.commit()
+    return jsonify({'message': 'Administrator account provisioned securely.'}), 201
 
 
 @auth_bp.post('/logout')

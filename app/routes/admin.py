@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request
 
 from app.extensions import db
-from app.models import Order, OrderItem, Product, Sale, SaleItem, StockMovement
+from app.models import Order, OrderItem, OrderStatusUpdate, Product, Sale, SaleItem, StockMovement
 from app.routes.auth import get_authenticated_admin
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/api/admin')
@@ -39,6 +39,11 @@ def update_order_status(order_id):
     order.whatsapp_status = payload.get('whatsapp_status', order.whatsapp_status)
     if 'payment_status' in payload:
         return jsonify({'error': 'Payment status must not be changed without a verified payment record.'}), 400
+    db.session.add(OrderStatusUpdate(
+        order_id=order.id,
+        status=order.order_status,
+        note=str(payload.get('note') or ''),
+    ))
     db.session.commit()
     return jsonify({'order': order.to_dict()})
 

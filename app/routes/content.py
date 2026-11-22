@@ -49,17 +49,33 @@ def serve_upload(filename):
 @content_bp.get('/content/hero')
 def get_hero():
     slides = HeroContent.query.filter(HeroContent.is_published.is_(True)).order_by(HeroContent.sort_order.asc(), HeroContent.id.asc()).all()
-    if not slides:
-        default_slide = HeroContent(
-            title='FRESH CATCH, DELIVERED EVERY DAY.',
+    fixed_images = [
+        '/images/products/fresh-fish.jpg',
+        '/images/categories/combos/family-feast.jpg',
+        '/images/categories/kitchen/grilled-tilapia.jpg',
+        '/images/categories/drinks/tropical-cooler.jpg',
+        '/images/products/fish-cuts.jpg',
+        '/images/products/fish-and-chips.jpg',
+    ]
+    existing_images = {slide.image_url for slide in slides}
+    for sort_order, image_url in enumerate(fixed_images):
+        if image_url in existing_images:
+            continue
+        db.session.add(HeroContent(
+            title='Pazuri Fish Fresh Catch',
             subtitle='FRESH FROM LAKE VICTORIA',
-            image_url='https://images.unsplash.com/photo-1544943910-4c1dc44aab77?auto=format&fit=crop&w=1200&q=80',
+            description="Sourced from Lake Victoria's waters",
+            image_url=image_url,
+            sort_order=sort_order,
             is_published=True,
-            sort_order=0,
-        )
-        db.session.add(default_slide)
+        ))
+    if slides:
         db.session.commit()
-        slides = [default_slide]
+        slides = HeroContent.query.filter(HeroContent.is_published.is_(True)).order_by(HeroContent.sort_order.asc(), HeroContent.id.asc()).all()
+    else:
+        db.session.commit()
+        slides = HeroContent.query.filter(HeroContent.is_published.is_(True)).order_by(HeroContent.sort_order.asc(), HeroContent.id.asc()).all()
+    slides = slides[:6]
     return jsonify({'hero': slides[0].to_dict(), 'slides': [slide.to_dict() for slide in slides]})
 
 

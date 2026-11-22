@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from sqlalchemy import func
 
 from app.extensions import db
 from app.models import Category
@@ -29,7 +30,7 @@ def manage_categories():
         name = str(payload.get('name', '')).strip()
         if not name:
             return jsonify({'error': 'Category name is required.'}), 400
-        if Category.query.filter_by(name=name).first():
+        if Category.query.filter(func.lower(Category.name) == name.lower()).first():
             return jsonify({'error': 'Category already exists.'}), 400
         category = Category(
             name=name,
@@ -62,6 +63,9 @@ def manage_category(category_id):
         name = str(payload['name']).strip()
         if not name:
             return jsonify({'error': 'Category name is required.'}), 400
+        duplicate = Category.query.filter(func.lower(Category.name) == name.lower(), Category.id != category_id).first()
+        if duplicate:
+            return jsonify({'error': 'Category already exists.'}), 400
         category.name = name
     if 'image_url' in payload:
         category.image_url = payload['image_url']

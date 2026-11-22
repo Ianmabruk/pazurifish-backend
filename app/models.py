@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 from app.extensions import db
@@ -19,10 +20,20 @@ class Product(db.Model):
     stock_quantity = db.Column(db.Integer, default=0)
     minimum_stock = db.Column(db.Integer, default=0)
     is_available = db.Column(db.Boolean, default=True)
+    featured = db.Column(db.Boolean, default=False)
+    status = db.Column(db.String(20), default='Active')
+    discount_price = db.Column(db.Float)
+    serving_sizes = db.Column(db.Text, default='')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def to_dict(self):
+        try:
+            serving_sizes = json.loads(self.serving_sizes or '[]')
+        except (TypeError, ValueError):
+            serving_sizes = []
+        if not isinstance(serving_sizes, list):
+            serving_sizes = []
         return {
             'id': self.id,
             'sku': self.sku,
@@ -38,6 +49,11 @@ class Product(db.Model):
             'stock_quantity': self.stock_quantity,
             'minimum_stock': self.minimum_stock,
             'is_available': self.is_available,
+            'featured': bool(self.featured),
+            'status': self.status or ('Out of Stock' if self.stock_quantity <= 0 else ('Active' if self.is_available else 'Draft')),
+            'discount_price': float(self.discount_price) if self.discount_price is not None else None,
+            'serving_sizes': serving_sizes,
+            'demo_only': bool(self.sku and self.sku.startswith('DEMO-')),
             'image': self.image_url,
         }
 
@@ -149,6 +165,8 @@ class Order(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     order_number = db.Column(db.String(80), unique=True, nullable=False)
+    tracking_number = db.Column(db.String(80), unique=True)
+    idempotency_key = db.Column(db.String(100), index=True)
     customer_name = db.Column(db.String(200))
     customer_phone = db.Column(db.String(80))
     delivery_area = db.Column(db.String(100), default='Nairobi')
@@ -169,6 +187,8 @@ class Order(db.Model):
         return {
             'id': self.id,
             'order_number': self.order_number,
+            'tracking_number': self.tracking_number or self.order_number,
+            'idempotency_key': self.idempotency_key,
             'customer_name': self.customer_name,
             'customer_phone': self.customer_phone,
             'delivery_area': self.delivery_area,
@@ -184,6 +204,7 @@ class Order(db.Model):
             'whatsapp_status': self.whatsapp_status,
             'items': [item.to_dict() for item in self.items],
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'status_history': [update.to_dict() for update in sorted(self.status_updates, key=lambda item: item.created_at or datetime.min)],
         }
 
 
@@ -206,6 +227,26 @@ class OrderItem(db.Model):
             'quantity': self.quantity,
             'unit_price': float(self.unit_price),
             'total_price': float(self.total_price),
+        }
+
+
+class OrderStatusUpdate(db.Model):
+    __tablename__ = 'order_status_updates'
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey('orders.id'), nullable=False)
+    status = db.Column(db.String(80), nullable=False)
+    note = db.Column(db.String(500), default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    order = db.relationship('Order', backref=db.backref('status_updates', lazy=True, cascade='all, delete-orphan'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'status': self.status,
+            'note': self.note or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
 
