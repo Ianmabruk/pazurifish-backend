@@ -12,8 +12,8 @@ ADMIN_TOKENS = {}
 
 DEFAULT_ADMIN_EMAILS = {
     'ian@gmail.com',
-    'noa@pasuri@gmail.com',
-    'dixon@pasuri@gmail.com',
+    'dickson@gmail.com',
+    'noah@gmail.com',
 }
 
 
@@ -77,9 +77,29 @@ def login_user():
     if email not in get_allowed_admin_emails():
         return jsonify({'error': 'This email is not authorized for administrator access.'}), 403
 
+    admin_password = os.getenv('ADMIN_PASSWORD', '')
     user = AdminUser.query.filter_by(email=email).first()
-    if user is None or not check_password_hash(user.password_hash, password):
-        return jsonify({'error': 'Invalid credentials'}), 401
+
+    if user is None:
+        # Allow first-time login with the shared admin password, provisioning securely.
+        if admin_password and secrets.compare_digest(password, admin_password):
+            user = AdminUser(
+                email=email,
+                full_name='Pazuri Administrator',
+                role='administrator',
+                password_hash=generate_password_hash(password),
+            )
+            db.session.add(user)
+            db.session.commit()
+        else:
+            return jsonify({'error': 'Invalid credentials'}), 401
+    elif not check_password_hash(user.password_hash, password):
+        # Allow rotation: if password matches env var, update hash.
+        if admin_password and secrets.compare_digest(password, admin_password):
+            user.password_hash = generate_password_hash(password)
+            db.session.commit()
+        else:
+            return jsonify({'error': 'Invalid credentials'}), 401
 
     token = secrets.token_urlsafe(32)
     ADMIN_TOKENS[token] = email
