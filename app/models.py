@@ -2,6 +2,19 @@ import json
 from datetime import datetime
 
 from app.extensions import db
+from flask import current_app
+
+
+def get_cdn_url(path: str) -> str:
+    """Convert a local path or URL to CDN URL if CDN is configured."""
+    if not path:
+        return path
+    if path.startswith(('http://', 'https://', 'data:')):
+        return path
+    cdn_base = current_app.config.get('CDN_BASE_URL', '') if current_app else ''
+    if cdn_base:
+        return f"{cdn_base.rstrip('/')}/{path.lstrip('/')}"
+    return path
 
 
 class Product(db.Model):
@@ -13,6 +26,7 @@ class Product(db.Model):
     description = db.Column(db.Text, nullable=False)
     specifications = db.Column(db.Text, default='')
     category = db.Column(db.String(80), default='Fish Butchery')
+    category_id = db.Column(db.Integer, db.ForeignKey('categories.id'))
     selling_price = db.Column(db.Float, nullable=False, default=0.0)
     cost_price = db.Column(db.Float, default=0.0)
     unit = db.Column(db.String(50), default='per kg')
@@ -41,11 +55,12 @@ class Product(db.Model):
             'description': self.description,
             'specifications': self.specifications or '',
             'category': self.category,
+            'category_id': self.category_id,
             'price': float(self.selling_price),
             'selling_price': float(self.selling_price),
             'cost_price': float(self.cost_price or 0),
             'unit': self.unit,
-            'image_url': self.image_url,
+            'image_url': get_cdn_url(self.image_url or ''),
             'stock_quantity': self.stock_quantity,
             'minimum_stock': self.minimum_stock,
             'is_available': self.is_available,
@@ -54,7 +69,7 @@ class Product(db.Model):
             'discount_price': float(self.discount_price) if self.discount_price is not None else None,
             'serving_sizes': serving_sizes,
             'demo_only': bool(self.sku and self.sku.startswith('DEMO-')),
-            'image': self.image_url,
+            'image': get_cdn_url(self.image_url or ''),
         }
 
 
@@ -87,7 +102,7 @@ class Offer(db.Model):
             'product_name': self.product.name if self.product else None,
             'title': self.title,
             'description': self.description,
-            'image_url': self.image_url,
+            'image_url': get_cdn_url(self.image_url or ''),
             'badge': self.badge,
             'discount_type': self.discount_type,
             'discount_value': self.discount_value,
@@ -125,7 +140,7 @@ class HeroContent(db.Model):
             'description': self.description or '',
             'cta_label': self.cta_label or '',
             'cta_url': self.cta_url or '',
-            'image_url': self.image_url,
+            'image_url': get_cdn_url(self.image_url or ''),
             'sort_order': self.sort_order,
             'is_published': self.is_published,
         }
@@ -349,17 +364,81 @@ class Category(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
+    slug = db.Column(db.String(100), unique=True)
+    description = db.Column(db.Text, default='')
     image_url = db.Column(db.String(500), default='')
     display_order = db.Column(db.Integer, default=0)
     is_active = db.Column(db.Boolean, default=True)
     show_on_homepage = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
-            'image_url': self.image_url or '',
+            'slug': self.slug or '',
+            'description': self.description or '',
+            'image_url': get_cdn_url(self.image_url or ''),
             'display_order': self.display_order,
             'is_active': self.is_active,
             'show_on_homepage': self.show_on_homepage,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class Deal(db.Model):
+    __tablename__ = 'deals'
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default='')
+    image_url = db.Column(db.String(500), default='')
+    deal_type = db.Column(db.String(80), default='bundle')
+    original_price = db.Column(db.Float, default=0.0)
+    deal_price = db.Column(db.Float, default=0.0)
+    discount_info = db.Column(db.String(200), default='')
+    product_ids = db.Column(db.Text, default='[]')
+    start_date = db.Column(db.DateTime)
+    end_date = db.Column(db.DateTime)
+    is_active = db.Column(db.Boolean, default=True)
+    is_featured = db.Column(db.Boolean, default=False)
+    display_order = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        try:
+            associated_products = json.loads(self.product_ids or '[]')
+        except (TypeError, ValueError):
+            associated_products = []
+        if not isinstance(associated_products, list):
+            associated_products = []
+        return {
+            'id': self.id,
+            'title': self.title,
+            'description': self.description or '',
+            'image_url': get_cdn_url(self.image_url or ''),
+            'deal_type': self.deal_type or 'bundle',
+            'product_ids': associated_products,
+            'original_price': float(self.original_price or 0),
+            'deal_price': float(self.deal_price or 0),
+            'discount_info': self.discount_info or '',
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'is_active': bool(self.is_active),
+            'is_featured': bool(self.is_featured),
+            'display_order': self.display_order or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AdminSetting(db.Model):
+    __tablename__ = 'admin_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(100), unique=True, nullable=False)
+    value = db.Column(db.Text, default='')
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
