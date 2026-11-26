@@ -13,6 +13,7 @@ from app.models import AdminUser, Category, HeroContent, Offer, Order, OrderItem
 from app.routes.admin import admin_bp
 from app.routes.auth import auth_bp
 from app.routes.content import content_bp
+from app.routes.deals import deals_bp
 from app.routes.offers import offers_bp
 from app.routes.orders import orders_bp
 from app.routes.products import products_bp
@@ -427,6 +428,7 @@ def create_app():
     app.register_blueprint(admin_bp)
     app.register_blueprint(whatsapp_bp)
     app.register_blueprint(categories_bp)
+    app.register_blueprint(deals_bp)
 
     @app.route('/api/health')
     def health():

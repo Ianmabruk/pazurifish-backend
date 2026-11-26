@@ -1,11 +1,32 @@
 from flask import Blueprint, jsonify, request
 from sqlalchemy import func
+import re
 
 from app.extensions import db
 from app.models import Category
 from app.routes.auth import get_authenticated_admin
 
 categories_bp = Blueprint('categories', __name__, url_prefix='/api')
+
+
+def generate_slug(name: str) -> str:
+    slug = name.lower().strip()
+    slug = re.sub(r'[^a-z0-9]+', '-', slug)
+    slug = slug.strip('-')
+    return slug
+
+
+def ensure_unique_slug(base_slug: str, exclude_id: int = None) -> str:
+    slug = base_slug
+    counter = 1
+    while True:
+        query = Category.query.filter(func.lower(Category.slug) == slug.lower())
+        if exclude_id:
+            query = query.filter(Category.id != exclude_id)
+        if not query.first():
+            return slug
+        counter += 1
+        slug = f"{base_slug}-{counter}"
 
 
 @categories_bp.get('/categories')
@@ -32,8 +53,11 @@ def manage_categories():
             return jsonify({'error': 'Category name is required.'}), 400
         if Category.query.filter(func.lower(Category.name) == name.lower()).first():
             return jsonify({'error': 'Category already exists.'}), 400
+        base_slug = generate_slug(name)
+        slug = ensure_unique_slug(base_slug)
         category = Category(
             name=name,
+            slug=slug,
             image_url=payload.get('image_url', ''),
             display_order=int(payload.get('display_order', 0) or 0),
             is_active=bool(payload.get('is_active', True)),
@@ -67,6 +91,8 @@ def manage_category(category_id):
         if duplicate:
             return jsonify({'error': 'Category already exists.'}), 400
         category.name = name
+        base_slug = generate_slug(name)
+        category.slug = ensure_unique_slug(base_slug, exclude_id=category_id)
     if 'image_url' in payload:
         category.image_url = payload['image_url']
     if 'display_order' in payload:
